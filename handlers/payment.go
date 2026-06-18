@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -126,6 +128,13 @@ func (h *PaymentHandler) TopUp(c *gin.Context) {
 		return
 	}
 
+	// Send background notification asynchronously
+	go func() {
+		title := "Top Up Berhasil"
+		body := fmt.Sprintf("Top up sebesar Rp %.0f berhasil. Saldo Anda sekarang: Rp %.0f", req.Amount, account.Balance)
+		_ = h.otpSvc.SendNotification(context.Background(), userID, title, body)
+	}()
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Top up berhasil",
@@ -245,6 +254,13 @@ func (h *PaymentHandler) Transfer(c *gin.Context) {
 		})
 		return
 	}
+
+	// Send background notification asynchronously
+	go func() {
+		title := "Transfer Berhasil"
+		body := fmt.Sprintf("Transfer sebesar Rp %.0f ke %s berhasil. Saldo Anda sekarang: Rp %.0f", req.Amount, trx.Description, trx.BalanceAfter)
+		_ = h.otpSvc.SendNotification(context.Background(), userID, title, body)
+	}()
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

@@ -243,3 +243,41 @@ func (s *OTPService) SendChangeEmailVerification(ctx context.Context, name, newE
 
 	return s.emailSvc.SendHTML(newEmail, subject, body)
 }
+
+// SendNotification sends a custom push notification to the user's registered FCM token
+func (s *OTPService) SendNotification(ctx context.Context, userID uint, title, body string) error {
+	var user models.User
+	if err := s.db.First(&user, userID).Error; err != nil {
+		return fmt.Errorf("find user: %w", err)
+	}
+
+	if user.FCMToken == "" {
+		return fmt.Errorf("user does not have FCM token registered")
+	}
+
+	client, err := s.firebaseApp.Messaging(ctx)
+	if err != nil {
+		return fmt.Errorf("firebase messaging client: %w", err)
+	}
+
+	message := &messaging.Message{
+		Token: user.FCMToken,
+		Notification: &messaging.Notification{
+			Title: title,
+			Body:  body,
+		},
+		Android: &messaging.AndroidConfig{
+			Priority: "high",
+		},
+		APNS: &messaging.APNSConfig{
+			Payload: &messaging.APNSPayload{
+				Aps: &messaging.Aps{
+					Sound: "default",
+				},
+			},
+		},
+	}
+
+	_, err = client.Send(ctx, message)
+	return err
+}
