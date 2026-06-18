@@ -414,3 +414,146 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		},
 	})
 }
+
+type SendChangeEmailOTPRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func (h *AuthHandler) SendChangeEmailOTP(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req SendChangeEmailOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Email baru tidak valid",
+		})
+		return
+	}
+
+	var user models.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "User tidak ditemukan",
+		})
+		return
+	}
+
+	// Generate OTP code
+	code, err := h.otpSvc.GenerateCode()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal menghasilkan OTP",
+		})
+		return
+	}
+
+	// Store OTP in Redis
+	if err := h.otpSvc.StoreChangeEmailOTP(c.Request.Context(), userID, req.Email, code); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal menyimpan OTP di Redis",
+		})
+		return
+	}
+
+	// Send OTP email
+	if err := h.otpSvc.SendChangeEmailVerification(c.Request.Context(), user.Name, req.Email, code); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal mengirim OTP ke email baru: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "OTP berhasil dikirim ke email baru",
+	})
+}
+
+type UpdateEmailRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	Code  string `json:"code" binding:"required"`
+}
+
+func (h *AuthHandler) UpdateEmail(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req UpdateEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Email dan OTP diperlukan",
+		})
+		return
+	}
+
+	var user models.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "User tidak ditemukan",
+		})
+		return
+	}
+
+	// Verify OTP
+	valid := h.otpSvc.VerifyChangeEmailOTP(c.Request.Context(), userID, req.Email, req.Code)
+	if !valid {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success":    false,
+			"message":    "Kode OTP tidak valid atau sudah kadaluarsa",
+			"error_code": "INVALID_OTP",
+		})
+		return
+	}
+
+	// Update in Firebase Auth via Admin SDK
+	authClient, err := h.firebaseApp.Auth(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal menginisialisasi Firebase Auth: " + err.Error(),
+		})
+		return
+	}
+
+	params := (&fbauth.UserToUpdate{}).Email(req.Email)
+	_, err = authClient.UpdateUser(c.Request.Context(), user.FirebaseUID, params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal memperbarui email di Firebase: " + err.Error(),
+		})
+		return
+	}
+
+	// Update in MySQL
+	user.Email = req.Email
+	if err := h.db.Save(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal memperbarui email di database",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Email berhasil diperbarui",
+		"data": models.UserResponse{
+			ID:            user.ID,
+			FirebaseUID:   user.FirebaseUID,
+			Email:         user.Email,
+			Name:          user.Name,
+			Role:          user.Role,
+			EmailVerified: user.EmailVerified,
+			TOTPEnabled:   user.TOTPEnabled,
+			CreatedAt:     user.CreatedAt.Format(time.RFC3339),
+		},
+	})
+}
+

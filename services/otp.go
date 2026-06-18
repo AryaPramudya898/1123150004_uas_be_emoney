@@ -200,3 +200,46 @@ func (s *OTPService) VerifyTOTP(ctx context.Context, user *models.User, code str
 
 	return valid, nil
 }
+
+// StoreChangeEmailOTP stores OTP in Redis for email change
+func (s *OTPService) StoreChangeEmailOTP(ctx context.Context, userID uint, email, code string) error {
+	key := fmt.Sprintf("otp:change-email:%d:%s", userID, email)
+	expiry := time.Duration(s.cfg.OTPExpiryMinutes) * time.Minute
+	return s.rdb.Set(ctx, key, code, expiry).Err()
+}
+
+// VerifyChangeEmailOTP verifies the OTP stored for email change
+func (s *OTPService) VerifyChangeEmailOTP(ctx context.Context, userID uint, email, code string) bool {
+	key := fmt.Sprintf("otp:change-email:%d:%s", userID, email)
+	stored, err := s.rdb.Get(ctx, key).Result()
+	if err != nil {
+		return false
+	}
+	if stored == code {
+		s.rdb.Del(ctx, key)
+		return true
+	}
+	return false
+}
+
+// SendChangeEmailVerification sends an OTP verification email to the new email address
+func (s *OTPService) SendChangeEmailVerification(ctx context.Context, name, newEmail, code string) error {
+	subject := "Verifikasi Perubahan Email E-Money"
+	body := fmt.Sprintf(`
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+  <div style="background: #f0f4ff; padding: 30px; border-radius: 10px;">
+    <h2 style="color: #333;">Verifikasi Perubahan Email</h2>
+    <p>Halo <strong>%s</strong>,</p>
+    <p>Gunakan kode OTP berikut untuk memverifikasi perubahan email Anda ke <strong>%s</strong>:</p>
+    <div style="background: #fff; border: 2px solid #667eea; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+      <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #667eea;">%s</span>
+    </div>
+    <p style="color: #666; font-size: 14px;">Kode ini berlaku selama <strong>%d menit</strong>.</p>
+    <p style="color: #999; font-size: 12px;">Jangan bagikan kode ini kepada siapapun.</p>
+  </div>
+</body>
+</html>`, name, newEmail, code, s.cfg.OTPExpiryMinutes)
+
+	return s.emailSvc.SendHTML(newEmail, subject, body)
+}

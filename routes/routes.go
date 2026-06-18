@@ -39,6 +39,8 @@ func Setup(db *gorm.DB, rdb *redis.Client, firebaseApp *firebase.App, cfg *confi
 			{
 				authRequired.GET("/me", authHandler.Me)
 				authRequired.PUT("/profile", authHandler.UpdateProfile)
+				authRequired.POST("/profile/send-email-otp", authHandler.SendChangeEmailOTP)
+				authRequired.POST("/profile/update-email", authHandler.UpdateEmail)
 				authRequired.PUT("/fcm-token", authHandler.UpdateFCMToken)
 				authRequired.POST("/verify-email-otp", authHandler.VerifyEmailOTP)
 			}
