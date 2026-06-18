@@ -38,6 +38,7 @@ func Setup(db *gorm.DB, rdb *redis.Client, firebaseApp *firebase.App, cfg *confi
 			authRequired.Use(middleware.AuthMiddleware(jwtSvc))
 			{
 				authRequired.GET("/me", authHandler.Me)
+				authRequired.PUT("/profile", authHandler.UpdateProfile)
 				authRequired.PUT("/fcm-token", authHandler.UpdateFCMToken)
 				authRequired.POST("/verify-email-otp", authHandler.VerifyEmailOTP)
 			}

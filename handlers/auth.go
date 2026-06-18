@@ -364,3 +364,53 @@ func (h *AuthHandler) VerifyEmailOTP(c *gin.Context) {
 		"message": "Email berhasil diverifikasi",
 	})
 }
+
+type UpdateProfileRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+func (h *AuthHandler) UpdateProfile(c *gin.Context) {
+	userID := c.GetUint("user_id")
+
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "nama diperlukan",
+		})
+		return
+	}
+
+	var user models.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "User tidak ditemukan",
+		})
+		return
+	}
+
+	user.Name = req.Name
+	if err := h.db.Save(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Gagal update nama profil",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Profil berhasil diperbarui",
+		"data": models.UserResponse{
+			ID:            user.ID,
+			FirebaseUID:   user.FirebaseUID,
+			Email:         user.Email,
+			Name:          user.Name,
+			Role:          user.Role,
+			EmailVerified: user.EmailVerified,
+			TOTPEnabled:   user.TOTPEnabled,
+			CreatedAt:     user.CreatedAt.Format(time.RFC3339),
+		},
+	})
+}
