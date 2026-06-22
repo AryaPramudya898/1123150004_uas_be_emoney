@@ -181,6 +181,8 @@ func (s *OTPService) RegisterTOTP(ctx context.Context, user *models.User) (secre
 	}).Error; err != nil {
 		return "", "", fmt.Errorf("save totp secret: %w", err)
 	}
+	user.TOTPSecret = key.Secret()
+	user.TOTPEnabled = false
 
 	return key.Secret(), qrCodeBase64, nil
 }
@@ -196,6 +198,7 @@ func (s *OTPService) VerifyTOTP(ctx context.Context, user *models.User, code str
 		if err := s.db.WithContext(ctx).Model(user).Update("totp_enabled", true).Error; err != nil {
 			return false, err
 		}
+		user.TOTPEnabled = true
 	}
 
 	return valid, nil

@@ -102,6 +102,9 @@ func (h *AuthHandler) VerifyToken(c *gin.Context) {
 			"name":           name,
 			"email_verified": emailVerified,
 		})
+		user.Email = email
+		user.Name = name
+		user.EmailVerified = emailVerified
 	}
 
 	jwtToken, err := h.jwtSvc.GenerateToken(&user)
