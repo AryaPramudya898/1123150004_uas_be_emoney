@@ -73,23 +73,46 @@ func (h *AuthHandler) VerifyToken(c *gin.Context) {
 	result := h.db.WithContext(ctx).Where("firebase_uid = ?", token.UID).First(&user)
 
 	if result.Error == gorm.ErrRecordNotFound {
-		user = models.User{
-			FirebaseUID:   token.UID,
-			Email:         email,
-			Name:          name,
-			Role:          "user",
-			EmailVerified: emailVerified,
-		}
-		if err := h.db.WithContext(ctx).Create(&user).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": "Gagal membuat user",
-			})
-			return
-		}
+		// Cari apakah email ini sudah terdaftar di database dengan UID lama (pasca ganti email)
+		var existingUser models.User
+		err := h.db.WithContext(ctx).Where("email = ?", email).First(&existingUser).Error
+		if err == nil {
+			// Hubungkan/sinkronkan UID baru ke database user yang sudah ada
+			if err := h.db.WithContext(ctx).Model(&existingUser).Updates(map[string]interface{}{
+				"firebase_uid":   token.UID,
+				"name":           name,
+				"email_verified": emailVerified,
+			}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": "Gagal mengaitkan akun baru",
+				})
+				return
+			}
+			existingUser.FirebaseUID = token.UID
+			existingUser.Name = name
+			existingUser.EmailVerified = emailVerified
+			user = existingUser
+		} else {
+			// Buat user baru jika benar-benar tidak ditemukan baik UID maupun email
+			user = models.User{
+				FirebaseUID:   token.UID,
+				Email:         email,
+				Name:          name,
+				Role:          "user",
+				EmailVerified: emailVerified,
+			}
+			if err := h.db.WithContext(ctx).Create(&user).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": "Gagal membuat user",
+				})
+				return
+			}
 
-		account := models.Account{UserID: user.ID, Balance: 0}
-		h.db.WithContext(ctx).Create(&account)
+			account := models.Account{UserID: user.ID, Balance: 0}
+			h.db.WithContext(ctx).Create(&account)
+		}
 	} else if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -514,7 +537,7 @@ func (h *AuthHandler) UpdateEmail(c *gin.Context) {
 		return
 	}
 
-	// Update in Firebase Auth via Admin SDK
+	// Update di Firebase Auth (hanya jika pengguna bukan login lewat Google)
 	authClient, err := h.firebaseApp.Auth(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -524,14 +547,39 @@ func (h *AuthHandler) UpdateEmail(c *gin.Context) {
 		return
 	}
 
-	params := (&fbauth.UserToUpdate{}).Email(req.Email)
-	_, err = authClient.UpdateUser(c.Request.Context(), user.FirebaseUID, params)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Gagal memperbarui email di Firebase: " + err.Error(),
-		})
-		return
+	fbUser, err := authClient.GetUser(c.Request.Context(), user.FirebaseUID)
+	isGoogle := false
+	if err == nil && fbUser != nil {
+		for _, info := range fbUser.ProviderUserInfo {
+			if info.ProviderID == "google.com" {
+				isGoogle = true
+				break
+			}
+		}
+	}
+
+	if isGoogle {
+		// Jika user login lewat Google:
+		// Hapus akun lama dari Firebase Auth agar Google B (akun baru) dapat masuk tanpa tabrakan provider
+		if err := authClient.DeleteUser(c.Request.Context(), user.FirebaseUID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "Gagal membersihkan sesi Firebase lama: " + err.Error(),
+			})
+			return
+		}
+	} else {
+		// Jika user login lewat Email/Password:
+		// Cukup update email di Firebase Auth agar password tetap berfungsi
+		params := (&fbauth.UserToUpdate{}).Email(req.Email)
+		_, err = authClient.UpdateUser(c.Request.Context(), user.FirebaseUID, params)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "Gagal memperbarui email di Firebase: " + err.Error(),
+			})
+			return
+		}
 	}
 
 	// Update in MySQL
